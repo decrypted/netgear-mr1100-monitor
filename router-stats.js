@@ -121,6 +121,17 @@ function initDatabase() {
       signal_rsrp INTEGER,
       signal_rsrq INTEGER,
       signal_sinr INTEGER,
+      cellular_download INTEGER,
+      cellular_upload INTEGER,
+      wifi_offload_download INTEGER,
+      wifi_offload_upload INTEGER,
+      wifi_offload_active INTEGER,
+      wifi_offload_ssid TEXT,
+      wifi_offload_rssi INTEGER,
+      wifi_offload_bars INTEGER,
+      ethernet_offload_download INTEGER,
+      ethernet_offload_upload INTEGER,
+      ethernet_offload_active INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -274,14 +285,22 @@ async function promptForCredentials() {
   return { ip, username, password };
 }
 
-function saveTimeseriesData(timestamp, totalRx, totalTx, sessionDuration, lifetimeBytes, signalRsrp, signalRsrq, signalSinr) {
+function saveTimeseriesData(timestamp, totalRx, totalTx, sessionDuration, lifetimeBytes, signalRsrp, signalRsrq, signalSinr,
+                            cellularDownload, cellularUpload, wifiOffloadDownload, wifiOffloadUpload, wifiOffloadActive, wifiOffloadSsid,
+                            wifiOffloadRssi, wifiOffloadBars, ethernetOffloadDownload, ethernetOffloadUpload, ethernetOffloadActive) {
   if (!db) return;
 
   const stmt = db.prepare(`
-    INSERT INTO timeseries_data (timestamp, total_rx_bytes, total_tx_bytes, session_duration, lifetime_bytes, signal_rsrp, signal_rsrq, signal_sinr)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO timeseries_data (
+      timestamp, total_rx_bytes, total_tx_bytes, session_duration, lifetime_bytes, signal_rsrp, signal_rsrq, signal_sinr,
+      cellular_download, cellular_upload, wifi_offload_download, wifi_offload_upload, wifi_offload_active, wifi_offload_ssid,
+      wifi_offload_rssi, wifi_offload_bars, ethernet_offload_download, ethernet_offload_upload, ethernet_offload_active
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(timestamp, totalRx, totalTx, sessionDuration, lifetimeBytes, signalRsrp, signalRsrq, signalSinr);
+  stmt.run(timestamp, totalRx, totalTx, sessionDuration, lifetimeBytes, signalRsrp, signalRsrq, signalSinr,
+           cellularDownload, cellularUpload, wifiOffloadDownload, wifiOffloadUpload, wifiOffloadActive ? 1 : 0, wifiOffloadSsid,
+           wifiOffloadRssi, wifiOffloadBars, ethernetOffloadDownload, ethernetOffloadUpload, ethernetOffloadActive ? 1 : 0);
 }
 
 // Detect gap in data and interpolate missing lifetime usage
@@ -356,13 +375,14 @@ function calculateUsageOverTime() {
   const result = {};
 
   for (const [label, cutoffTime] of Object.entries(periods)) {
-    // Get the earliest and latest lifetime_bytes within the period
+    // Get the earliest and latest total bytes (RX+TX) within the period
+    // This includes ALL connection types (cellular + WiFi offload + Ethernet offload)
     const stmt = db.prepare(`
       SELECT
-        MIN(lifetime_bytes) as start_bytes,
-        MAX(lifetime_bytes) as end_bytes
+        MIN(total_rx_bytes + total_tx_bytes) as start_bytes,
+        MAX(total_rx_bytes + total_tx_bytes) as end_bytes
       FROM timeseries_data
-      WHERE timestamp >= ? AND lifetime_bytes IS NOT NULL
+      WHERE timestamp >= ?
     `);
 
     const row = stmt.get(cutoffTime);
@@ -409,13 +429,14 @@ function calculateSpeedsFromTimeseries(limit = 20) {
     const timeDiffSec = timeDiffMs / 1000;
 
     // Calculate bytes transferred and convert to bytes/second
+    // NOTE: Database stores aggregated totals (already converted to standard convention)
     const rxDiff = current.total_rx_bytes - previous.total_rx_bytes;
     const txDiff = current.total_tx_bytes - previous.total_tx_bytes;
 
     // Handle counter rollover (router reset) - skip negative values
     if (rxDiff >= 0 && txDiff >= 0 && timeDiffSec > 0) {
-      const downloadSpeed = rxDiff / timeDiffSec;
-      const uploadSpeed = txDiff / timeDiffSec;
+      const downloadSpeed = rxDiff / timeDiffSec;  // RX = Download (standard)
+      const uploadSpeed = txDiff / timeDiffSec;    // TX = Upload (standard)
 
       downloadSpeeds.push(downloadSpeed);
       uploadSpeeds.push(uploadSpeed);
@@ -733,11 +754,50 @@ function displayStats(data) {
 
   if (displayOptions.showNetwork) {
     console.log(`${colors.bright}${colors.white}┌─ 📶 Network Connection ────────────────────────────────────────────────┐${colors.reset}`);
-    console.log(`${colors.white}│${colors.reset} ${colors.bright}Status:${colors.reset}    ${colors.green}${wwan.connection}${colors.reset} (${wwan.connectionText}) via ${colors.bright}${wwan.registerNetworkDisplay}${colors.reset}`);
-    console.log(`${colors.white}│${colors.reset} ${colors.bright}Signal:${colors.reset}    ${getSignalBars(signal.bars)} ${signal.bars}/5 bars`);
-    console.log(`${colors.white}│${colors.reset} ${colors.bright}Quality:${colors.reset}   RSRP ${colors.cyan}${signal.rsrp} dBm${colors.reset} │ RSRQ ${colors.cyan}${signal.rsrq} dB${colors.reset} │ SINR ${colors.cyan}${signal.sinr} dB${colors.reset}`);
-    console.log(`${colors.white}│${colors.reset} ${colors.bright}Band:${colors.reset}      ${colors.yellow}${wwanAdv.curBand}${colors.reset} │ IP: ${colors.magenta}${wwan.IP}${colors.reset}`);
+
+    // Check for WiFi offloading
+    const wifiOffload = data.wifi && data.wifi.offload;
+    const wifiOffloadActive = wifiOffload && wifiOffload.enabled && wifiOffload.status === 'On' && wifiOffload.connectionSsid;
+
+    // Check for Ethernet offloading
+    const ethOffload = data.ethernet && data.ethernet.offload;
+    const ethOffloadActive = ethOffload && ethOffload.enabled && ethOffload.on && ethOffload.ipv4Addr && ethOffload.ipv4Addr !== '0.0.0.0';
+
+    if (wifiOffloadActive) {
+      // WiFi offloading is active - show offload info only
+      const offloadBars = getSignalBars(wifiOffload.bars || 0);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Status:${colors.reset}    📡 ${colors.green}WiFi Offload${colors.reset} via ${colors.bright}${wifiOffload.connectionSsid}${colors.reset}`);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Signal:${colors.reset}    ${offloadBars} ${wifiOffload.bars || 0}/5 bars`);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}IP:${colors.reset}        ${colors.magenta}${wifiOffload.stationIPv4 || 'N/A'}${colors.reset}`);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Cellular:${colors.reset}  ${colors.dim}${wwan.connection} (${wwan.connectionText}) via ${wwan.registerNetworkDisplay} - Standby${colors.reset}`);
+    } else if (ethOffloadActive) {
+      // Ethernet offloading is active - show offload info only
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Status:${colors.reset}    🔌 ${colors.green}Ethernet Offload${colors.reset}`);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}IP:${colors.reset}        ${colors.magenta}${ethOffload.ipv4Addr}${colors.reset}`);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Cellular:${colors.reset}  ${colors.dim}${wwan.connection} (${wwan.connectionText}) via ${wwan.registerNetworkDisplay} - Standby${colors.reset}`);
+    } else {
+      // No offloading - show normal cellular connection info
+      const dataUsage = wwan.dataUsage && wwan.dataUsage.generic;
+      const lifetimeData = dataUsage ? parseInt(dataUsage.dataTransferred || 0) : 0;
+      const roamingData = dataUsage ? parseInt(dataUsage.dataTransferredRoaming || 0) : 0;
+      const totalLifetimeBytes = lifetimeData + roamingData;
+
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Status:${colors.reset}    ${colors.green}${wwan.connection}${colors.reset} (${wwan.connectionText}) via ${colors.bright}${wwan.registerNetworkDisplay}${colors.reset}`);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Signal:${colors.reset}    ${getSignalBars(signal.bars)} ${signal.bars}/5 bars`);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Quality:${colors.reset}   RSRP ${colors.cyan}${signal.rsrp} dBm${colors.reset} │ RSRQ ${colors.cyan}${signal.rsrq} dB${colors.reset} │ SINR ${colors.cyan}${signal.sinr} dB${colors.reset}`);
+      console.log(`${colors.white}│${colors.reset} ${colors.bright}Band:${colors.reset}      ${colors.yellow}${wwanAdv.curBand}${colors.reset} │ IP: ${colors.magenta}${wwan.IP}${colors.reset}`);
+      if (totalLifetimeBytes > 0) {
+        console.log(`${colors.white}│${colors.reset} ${colors.bright}Lifetime:${colors.reset}  ${colors.yellow}${formatBytes(totalLifetimeBytes)}${colors.reset} ${colors.dim}(billing cycle)${colors.reset}`);
+      }
+    }
+
     console.log(`${colors.white}│${colors.reset} ${colors.bright}Session:${colors.reset}   ${Math.floor(wwan.sessDuration / 60)}m ${wwan.sessDuration % 60}s`);
+
+    // Warning about offload counter accuracy
+    if (wifiOffloadActive || ethOffloadActive) {
+      console.log(`${colors.white}│${colors.reset} ${colors.yellow}⚠ Note:${colors.reset}     ${colors.dim}Offload counters may be inaccurate due to router firmware${colors.reset}`);
+    }
+
     console.log(`${colors.white}└────────────────────────────────────────────────────────────────────────┘${colors.reset}\n`);
   }
 
@@ -754,9 +814,28 @@ function displayStats(data) {
   }
 
   const dataUsage = wwan.dataUsage.generic;
-  const totalTx = parseInt(wwan.dataTransferredTx);
-  const totalRx = parseInt(wwan.dataTransferredRx);
-  const totalData = totalTx + totalRx;
+
+  // Aggregate data from all sources (cellular + WiFi offload + Ethernet offload)
+  // NOTE: Cellular uses standard convention (TX=Upload, RX=Download)
+  // BUT offload counters are reversed (TX=Download, RX=Upload)!
+  let totalDownload = parseInt(wwan.dataTransferredRx) || 0;  // Cellular: RX = Download
+  let totalUpload = parseInt(wwan.dataTransferredTx) || 0;     // Cellular: TX = Upload
+
+  // Add WiFi offload data if available (reversed convention!)
+  const wifiOffload = data.wifi && data.wifi.offload;
+  if (wifiOffload && wifiOffload.dataTransferred) {
+    totalDownload += parseInt(wifiOffload.dataTransferred.tx) || 0;  // Offload: TX = Download
+    totalUpload += parseInt(wifiOffload.dataTransferred.rx) || 0;     // Offload: RX = Upload
+  }
+
+  // Add Ethernet offload data if available (reversed convention!)
+  const ethOffload = data.ethernet && data.ethernet.offload;
+  if (ethOffload) {
+    totalDownload += parseInt(ethOffload.tx) || 0;  // Offload: TX = Download
+    totalUpload += parseInt(ethOffload.rx) || 0;     // Offload: RX = Upload
+  }
+
+  const totalData = totalDownload + totalUpload;
 
   // Calculate lifetime usage
   const lifetimeData = parseInt(dataUsage.dataTransferred || 0);
@@ -764,50 +843,53 @@ function displayStats(data) {
   const totalLifetimeBytes = lifetimeData + roamingData;
 
   if (displayOptions.showBandwidth) {
-    console.log(`${colors.bright}${colors.white}┌─ Data Usage & Bandwidth ───────────────────────────────────────────────┐${colors.reset}`);
+    // Check if offloading is active for warning display in header
+    const isOffloadActive = (wifiOffload && wifiOffload.enabled && wifiOffload.status === 'On' && wifiOffload.connectionSsid) ||
+                            (ethOffload && ethOffload.enabled && ethOffload.on && ethOffload.ipv4Addr && ethOffload.ipv4Addr !== '0.0.0.0');
+
+    // Show warning in header if offloading is active
+    if (isOffloadActive) {
+      console.log(`${colors.bright}${colors.white}┌─ Data Usage & Bandwidth ${colors.yellow}⚠ May be inaccurate${colors.white} ───────────────────────┐${colors.reset}`);
+    } else {
+      console.log(`${colors.bright}${colors.white}┌─ Data Usage & Bandwidth ───────────────────────────────────────────────┐${colors.reset}`);
+    }
     console.log(`${colors.white}│${colors.reset} ${colors.bright}Session Data:${colors.reset}`);
-    console.log(`${colors.white}│${colors.reset}${createDataBar('Download', totalRx, totalData, 35, colors.cyan)}`);
-    console.log(`${colors.white}│${colors.reset}${createDataBar('Upload', totalTx, totalData, 35, colors.magenta)}`);
+    console.log(`${colors.white}│${colors.reset}${createDataBar('Download', totalDownload, totalData, 35, colors.cyan)}`);
+    console.log(`${colors.white}│${colors.reset}${createDataBar('Upload', totalUpload, totalData, 35, colors.magenta)}`);
+    console.log(`${colors.white}│${colors.reset}   ${colors.dim}Total: ${colors.yellow}${formatBytes(totalData)}${colors.reset}`);
 
-    // Show total data usage from billing cycle
-    if (totalLifetimeBytes > 0) {
-      const sessionUsage = formatBytes(totalData);
-      const totalUsage = formatBytes(totalLifetimeBytes);
-      console.log(`${colors.white}│${colors.reset}   ${colors.dim}Session: ${colors.yellow}${sessionUsage.padEnd(10)}${colors.reset} ${colors.dim}Lifetime: ${colors.bright}${colors.yellow}${totalUsage}${colors.reset}`);
+    // Calculate usage over time periods
+    const usage = calculateUsageOverTime();
+    if (usage) {
+      // Helper function to format usage entry with fixed width (padded labels, right-aligned values)
+      const formatUsageEntry = (label, bytes) => {
+        const formatted = bytes === null ? '---' : formatBytes(bytes);
+        const paddedLabel = label.padEnd(3); // Pad label to 3 chars (e.g., "5m ", "1h ", "24h")
+        const value = formatted.padStart(9); // Right-align the value part
+        // Colorize: cyan label, yellow value
+        return `${colors.cyan}${paddedLabel}${colors.reset}:${colors.yellow}${value}${colors.reset} `;
+      };
 
-      // Calculate usage over time periods
-      const usage = calculateUsageOverTime();
-      if (usage) {
-        // Helper function to format usage entry with fixed width (padded labels, right-aligned values)
-        const formatUsageEntry = (label, bytes) => {
-          const formatted = bytes === null ? '---' : formatBytes(bytes);
-          const paddedLabel = label.padEnd(3); // Pad label to 3 chars (e.g., "5m ", "1h ", "24h")
-          const value = formatted.padStart(9); // Right-align the value part
-          // Colorize: cyan label, yellow value
-          return `${colors.cyan}${paddedLabel}${colors.reset}:${colors.yellow}${value}${colors.reset} `;
-        };
+      // Minutes line
+      const minuteParts = [];
+      if (usage['5m'] !== null || usage['15m'] !== null || usage['30m'] !== null || usage['45m'] !== null) {
+        minuteParts.push(formatUsageEntry('5m', usage['5m']));
+        minuteParts.push(formatUsageEntry('15m', usage['15m']));
+        minuteParts.push(formatUsageEntry('30m', usage['30m']));
+        minuteParts.push(formatUsageEntry('45m', usage['45m']));
 
-        // Minutes line
-        const minuteParts = [];
-        if (usage['5m'] !== null || usage['15m'] !== null || usage['30m'] !== null || usage['45m'] !== null) {
-          minuteParts.push(formatUsageEntry('5m', usage['5m']));
-          minuteParts.push(formatUsageEntry('15m', usage['15m']));
-          minuteParts.push(formatUsageEntry('30m', usage['30m']));
-          minuteParts.push(formatUsageEntry('45m', usage['45m']));
+        console.log(`${colors.white}│${colors.reset}   ${minuteParts.join('')}`);
+      }
 
-          console.log(`${colors.white}│${colors.reset}   ${minuteParts.join('')}`);
-        }
+      // Hours line
+      const hourParts = [];
+      if (usage['1h'] !== null || usage['6h'] !== null || usage['12h'] !== null || usage['24h'] !== null) {
+        hourParts.push(formatUsageEntry('1h', usage['1h']));
+        hourParts.push(formatUsageEntry('6h', usage['6h']));
+        hourParts.push(formatUsageEntry('12h', usage['12h']));
+        hourParts.push(formatUsageEntry('24h', usage['24h']));
 
-        // Hours line
-        const hourParts = [];
-        if (usage['1h'] !== null || usage['6h'] !== null || usage['12h'] !== null || usage['24h'] !== null) {
-          hourParts.push(formatUsageEntry('1h', usage['1h']));
-          hourParts.push(formatUsageEntry('6h', usage['6h']));
-          hourParts.push(formatUsageEntry('12h', usage['12h']));
-          hourParts.push(formatUsageEntry('24h', usage['24h']));
-
-          console.log(`${colors.white}│${colors.reset}   ${hourParts.join('')}`);
-        }
+        console.log(`${colors.white}│${colors.reset}   ${hourParts.join('')}`);
       }
     }
   }
@@ -818,25 +900,68 @@ function displayStats(data) {
   // Check for gaps and interpolate missing data before saving current data
   handleDataGap(timestamp, totalLifetimeBytes);
 
+  // Calculate individual connection type breakdown
+  const cellularDownload = parseInt(wwan.dataTransferredRx) || 0;
+  const cellularUpload = parseInt(wwan.dataTransferredTx) || 0;
+
+  const wifiOffloadDownload = (wifiOffload && wifiOffload.dataTransferred) ? (parseInt(wifiOffload.dataTransferred.tx) || 0) : 0;
+  const wifiOffloadUpload = (wifiOffload && wifiOffload.dataTransferred) ? (parseInt(wifiOffload.dataTransferred.rx) || 0) : 0;
+  const wifiOffloadActive = wifiOffload && wifiOffload.enabled && wifiOffload.status === 'On' && wifiOffload.connectionSsid;
+  const wifiOffloadSsid = wifiOffloadActive ? wifiOffload.connectionSsid : null;
+  const wifiOffloadRssi = wifiOffloadActive ? (wifiOffload.rssi || null) : null;
+  const wifiOffloadBars = wifiOffloadActive ? (wifiOffload.bars || null) : null;
+
+  const ethernetOffloadDownload = ethOffload ? (parseInt(ethOffload.tx) || 0) : 0;
+  const ethernetOffloadUpload = ethOffload ? (parseInt(ethOffload.rx) || 0) : 0;
+  const ethernetOffloadActive = ethOffload && ethOffload.enabled && ethOffload.on && ethOffload.ipv4Addr && ethOffload.ipv4Addr !== '0.0.0.0';
+
   saveTimeseriesData(
     timestamp,
-    totalRx,
-    totalTx,
+    totalUpload,
+    totalDownload,
     wwan.sessDuration,
     totalLifetimeBytes,
     signal.rsrp,
     signal.rsrq,
-    signal.sinr
+    signal.sinr,
+    cellularDownload,
+    cellularUpload,
+    wifiOffloadDownload,
+    wifiOffloadUpload,
+    wifiOffloadActive,
+    wifiOffloadSsid,
+    wifiOffloadRssi,
+    wifiOffloadBars,
+    ethernetOffloadDownload,
+    ethernetOffloadUpload,
+    ethernetOffloadActive
   );
 
   // Calculate bandwidth if we have previous stats
   if (previousStats) {
     const timeDiff = POLL_INTERVAL;
-    const prevTx = parseInt(previousStats.wwan.dataTransferredTx);
-    const prevRx = parseInt(previousStats.wwan.dataTransferredRx);
+    // Cellular: standard convention (TX=Upload, RX=Download)
+    // Offload: reversed convention (TX=Download, RX=Upload)
+    // Aggregate previous totals from all sources (just like we did for current totals)
+    let prevDownload = parseInt(previousStats.wwan.dataTransferredRx) || 0;  // Cellular: RX = Download
+    let prevUpload = parseInt(previousStats.wwan.dataTransferredTx) || 0;     // Cellular: TX = Upload
 
-    const downloadSpeed = calculateBandwidth(totalRx, prevRx, timeDiff);
-    const uploadSpeed = calculateBandwidth(totalTx, prevTx, timeDiff);
+    // Add previous WiFi offload data if available (reversed!)
+    const prevWifiOffload = previousStats.wifi && previousStats.wifi.offload;
+    if (prevWifiOffload && prevWifiOffload.dataTransferred) {
+      prevDownload += parseInt(prevWifiOffload.dataTransferred.tx) || 0;  // Offload: TX = Download
+      prevUpload += parseInt(prevWifiOffload.dataTransferred.rx) || 0;     // Offload: RX = Upload
+    }
+
+    // Add previous Ethernet offload data if available (reversed!)
+    const prevEthOffload = previousStats.ethernet && previousStats.ethernet.offload;
+    if (prevEthOffload) {
+      prevDownload += parseInt(prevEthOffload.tx) || 0;  // Offload: TX = Download
+      prevUpload += parseInt(prevEthOffload.rx) || 0;     // Offload: RX = Upload
+    }
+
+    const downloadSpeed = calculateBandwidth(totalDownload, prevDownload, timeDiff);
+    const uploadSpeed = calculateBandwidth(totalUpload, prevUpload, timeDiff);
 
     // Save calculated speed to legacy table (for backward compatibility)
     saveBandwidthData(downloadSpeed, uploadSpeed);

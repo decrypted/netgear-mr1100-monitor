@@ -128,6 +128,48 @@ test('No hardcoded credentials in main script', () => {
   assert(passLine && passLine.includes('= null'), 'PASSWORD should be initialized as null');
 });
 
+// Test 11: Check tools directory exists
+test('tools/ directory exists with utility scripts', () => {
+  assert(fs.existsSync('tools'), 'tools directory not found');
+  assert(fs.statSync('tools').isDirectory(), 'tools is not a directory');
+});
+
+// Test 12: Check utility scripts exist
+test('All utility scripts exist in tools/', () => {
+  assert(fs.existsSync('tools/migrate-db.js'), 'migrate-db.js not found');
+  assert(fs.existsSync('tools/check-api.js'), 'check-api.js not found');
+  assert(fs.existsSync('tools/test-counters.js'), 'test-counters.js not found');
+});
+
+// Test 13: Check debug mode script exists
+test('Debug mode script exists', () => {
+  assert(fs.existsSync('router-stats-debug.js'), 'router-stats-debug.js not found');
+  const script = fs.readFileSync('router-stats-debug.js', 'utf8');
+  assert(script.includes('function displayDebugInfo'), 'Missing displayDebugInfo function');
+});
+
+// Test 14: Verify utility scripts have correct syntax
+test('Utility scripts have valid syntax', () => {
+  const { execSync } = require('child_process');
+
+  try {
+    execSync('node -c tools/migrate-db.js', { stdio: 'pipe' });
+    execSync('node -c tools/check-api.js', { stdio: 'pipe' });
+    execSync('node -c tools/test-counters.js', { stdio: 'pipe' });
+  } catch (error) {
+    throw new Error(`Syntax error in utility scripts: ${error.message}`);
+  }
+});
+
+// Test 15: Check npm scripts for tools
+test('npm scripts defined for all tools', () => {
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  assert(pkg.scripts.migrate, 'Missing migrate script');
+  assert(pkg.scripts['check-api'], 'Missing check-api script');
+  assert(pkg.scripts['test-counters'], 'Missing test-counters script');
+  assert(pkg.scripts.debug, 'Missing debug script');
+});
+
 console.log(`\n${colors.yellow}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${colors.reset}`);
 console.log(`\n📊 Test Results:`);
 console.log(`   ${colors.green}✓ ${passed} passed${colors.reset}`);

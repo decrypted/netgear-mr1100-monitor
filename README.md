@@ -7,7 +7,9 @@ A beautiful, interactive Node.js CLI dashboard that monitors and displays real-t
 ### Core Monitoring
 - Real-time monitoring with automatic updates every 5 seconds
 - Network connection status with signal strength visualization (5-bar display)
+- **WiFi and Ethernet Offloading support** - monitors when router uses external WiFi or wired connection
 - Data usage tracking (session download/upload/total + lifetime usage)
+- Aggregated data tracking across all connection types (cellular + WiFi offload + Ethernet offload)
 - Live bandwidth calculation with real-time speeds
 - ASCII histogram showing bandwidth history (last 20 samples)
 - Network quality metrics (RSRP, RSRQ, SINR)
@@ -88,8 +90,23 @@ npm run monitor
 # Start with verbose mode (shows connected device details)
 npm run verbose
 
+# Debug mode (raw API output for troubleshooting)
+npm run debug
+
 # Reset credentials and re-prompt on startup
 npm run reset
+```
+
+### Utility Tools:
+```bash
+# Migrate database schema (if upgrading from older version)
+npm run migrate
+
+# Test router API connection and dump raw response
+npm run check-api
+
+# Test counter direction (run while downloading to verify TX/RX)
+npm run test-counters
 ```
 
 ### Run directly with Node.js:
@@ -127,25 +144,29 @@ The service displays beautiful, interactive panels:
 
 ### 📡 Network Connection Panel
 - Connection status with operator name (e.g., "Connected (4G+) via TelekomGR")
+- **WiFi Offload detection** - shows when router is using external WiFi (SSID, signal bars, RSSI)
+- **Ethernet Offload detection** - shows when router is using wired connection
 - Signal strength with visual 5-bar indicator
 - Signal quality metrics: RSRP, RSRQ, SINR (in dBm/dB)
 - Current LTE band (e.g., "LTE B3", "LTE B7")
 - IP address assignment
 - Session duration counter
+- Lifetime data usage (billing cycle tracking for cellular)
 
 ### 📊 Data Usage & Bandwidth Panel
 **Session Data:**
 - Download/Upload bars showing percentage distribution
-- Total data transferred in current session
-- **Lifetime total usage** (includes roaming data)
+- Total data transferred in current session (aggregated from all sources)
+- Usage over time periods: 5m, 15m, 30m, 45m, 1h, 6h, 12h, 24h
 
 **Current Speed:**
 - Real-time download speed (with horizontal bar graph)
 - Real-time upload speed (with horizontal bar graph)
 - Scales dynamically based on peak speeds
+- Aggregates bandwidth from cellular + WiFi offload + Ethernet offload
 
 **Bandwidth History:**
-- ASCII histogram showing last 20 data points (appears after 5+ samples)
+- ASCII histogram showing last 66 data points (appears after 5+ samples)
 - Separate download (cyan) and upload (magenta) graphs
 - Timeline indicator (older ← → newer)
 - Visual representation of bandwidth patterns over time
@@ -197,12 +218,37 @@ Press `Ctrl+C` to stop the monitoring service.
 - **Login failed**: Check username and password credentials
 - **No data displayed**: Ensure router API is accessible and not blocked by firewall
 
+## Known Issues
+
+### WiFi and Ethernet Offload Counter Accuracy
+
+**IMPORTANT**: The Netgear MR1100 router firmware has bugs in WiFi and Ethernet offload counter reporting:
+
+- **Slow Updates**: Counters update in batches every 5-10 seconds instead of real-time
+- **Counter Freezing**: Counters may stop updating entirely for extended periods
+- **Severe Underreporting**: Actual data usage can be 3-5x higher than what the router reports
+  - Example: Router may show 375 MB when actual download is 1+ GB
+
+**This is a router firmware limitation and cannot be fixed by this application.**
+
+When WiFi or Ethernet offloading is active, the application displays a warning message:
+- Main UI: "⚠ Note: Offload counters may be inaccurate due to router firmware"
+- Debug mode: Detailed warning about potential underreporting
+
+**Cellular counters are accurate** - this issue only affects WiFi and Ethernet offload connections.
+
+For troubleshooting, use debug mode to see raw counter values:
+```bash
+npm run debug
+```
+
 ## Notes
 
-- The service uses standard Node.js http module (no external dependencies)
+- The service uses SQLite database for persistent storage and settings
 - Data usage resets when router connection restarts
 - Bandwidth calculation requires at least 2 polling cycles (first shows 0)
 - Color output uses ANSI escape codes (works in most terminals)
+- Historical data is kept for 7 days (configurable in code)
 
 ## License
 

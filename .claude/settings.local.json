@@ -12,7 +12,14 @@
       "Bash(sqlite3:*)",
       "Bash(npm test)",
       "Bash(node router-stats.js --help)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(python3:*)",
+      "Bash(timeout 15 npm run debug)",
+      "Bash(timeout 65 npm run debug)",
+      "Bash(tee:*)",
+      "Read(//tmp/**)",
+      "Bash(cat:*)",
+      "Bash(npm run migrate:*)"
     ],
     "deny": [],
     "ask": []
