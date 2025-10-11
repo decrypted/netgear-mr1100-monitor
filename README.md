@@ -32,7 +32,7 @@ A beautiful, interactive Node.js CLI dashboard that monitors and displays real-t
 
 ## Requirements
 
-- Node.js 14.0.0 or higher
+- Node.js 20.0.0 or higher
 - Access to your Netgear MR1100 router on local network
 
 ## Installation

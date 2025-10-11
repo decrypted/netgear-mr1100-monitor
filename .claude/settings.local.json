@@ -19,7 +19,8 @@
       "Bash(tee:*)",
       "Read(//tmp/**)",
       "Bash(cat:*)",
-      "Bash(npm run migrate:*)"
+      "Bash(npm run migrate:*)",
+      "Bash(npm info:*)"
     ],
     "deny": [],
     "ask": []
