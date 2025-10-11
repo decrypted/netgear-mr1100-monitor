@@ -1,0 +1,14 @@
+# Database
+router-stats.db
+router-stats.db-shm
+router-stats.db-wal
+
+# Node modules
+node_modules/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

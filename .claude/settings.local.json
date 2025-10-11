@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -v http://192.168.2.1/api/model.json)",
+      "Bash(curl -v http://192.168.2.1/)",
+      "Bash(curl -v -X POST http://192.168.2.1/Forms/config -d \"session.password=adaniel\")",
+      "Bash(curl -v http://192.168.2.1/sess_cd_tmp)",
+      "Bash(curl:*)",
+      "Bash(chmod:*)",
+      "Bash(node router-stats.js)",
+      "Bash(npm start)",
+      "Bash(sqlite3:*)",
+      "Bash(npm test)",
+      "Bash(node router-stats.js --help)",
+      "Bash(node:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

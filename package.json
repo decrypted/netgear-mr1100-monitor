@@ -1,0 +1,30 @@
+{
+  "name": "netgear-mr1100-monitor",
+  "version": "1.0.0",
+  "description": "Real-time monitoring dashboard for Netgear Nighthawk M1 (MR1100) router",
+  "main": "router-stats.js",
+  "scripts": {
+    "start": "node router-stats.js",
+    "monitor": "node router-stats.js",
+    "verbose": "node router-stats.js --verbose",
+    "reset": "node router-stats.js --reset",
+    "test": "node test.js",
+    "dev": "node router-stats.js"
+  },
+  "keywords": [
+    "netgear",
+    "router",
+    "monitor",
+    "bandwidth",
+    "network",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1"
+  }
+}
